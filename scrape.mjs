@@ -5,7 +5,6 @@ import { writeFileSync } from 'fs';
 puppeteer.use(stealth());
 
 const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci';
-const DEFAULT_MAX_PAGES = 25;
 const DEFAULT_DELAY = 1000;
 const DEFAULT_OUTPUT = 'listings.json';
 const MAX_RETRIES = 3;
@@ -20,7 +19,6 @@ const CATEGORIES = [
 ];
 
 const args = process.argv.slice(2);
-let maxPages = DEFAULT_MAX_PAGES;
 let delay = DEFAULT_DELAY;
 let outputFile = DEFAULT_OUTPUT;
 let targetCategory = null;
@@ -28,10 +26,7 @@ let minPrice = null;
 let maxPrice = null;
 
 for (let i = 0; i < args.length; i++) {
-  if (args[i] === '--pages' && args[i + 1]) {
-    maxPages = parseInt(args[i + 1], 10);
-    i++;
-  } else if (args[i] === '--delay' && args[i + 1]) {
+  if (args[i] === '--delay' && args[i + 1]) {
     delay = parseInt(args[i + 1], 10);
     i++;
   } else if (args[i] === '--output' && args[i + 1]) {
@@ -58,6 +53,23 @@ if (targetCategory && categoriesToScrape.length === 0) {
   process.exit(1);
 }
 
+function buildUrl(categorySlug, pageNum) {
+  let url = `${BASE_URL}/${categorySlug}/?courier=1`;
+  
+  if (minPrice !== null) {
+    url += `&search[filter_float_price:from]=${minPrice}`;
+  }
+  if (maxPrice !== null) {
+    url += `&search[filter_float_price:to]=${maxPrice}`;
+  }
+  
+  if (pageNum > 1) {
+    url += `&page=${pageNum}`;
+  }
+  
+  return url;
+}
+
 function parsePrice(priceStr) {
   if (!priceStr || priceStr === 'N/A') return NaN;
   const cleaned = priceStr.replace(/[^\d,]/g, '').replace(',', '.');
@@ -66,21 +78,51 @@ function parsePrice(priceStr) {
 
 function filterByPrice(listings) {
   if (minPrice === null && maxPrice === null) return listings;
-
   return listings.filter(listing => {
     const price = parsePrice(listing.price);
     if (isNaN(price)) return true;
-
     if (minPrice !== null && price < minPrice) return false;
     if (maxPrice !== null && price > maxPrice) return false;
     return true;
   });
 }
 
+async function checkPageCount(browser, categorySlug) {
+  const url = buildUrl(categorySlug, 1);
+  
+  try {
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1920, height: 1080 });
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    await page.waitForSelector('div[data-cy="ad-card-title"]', { timeout: 10000 });
+    
+    const paginationInfo = await page.evaluate(() => {
+      const paginationLinks = document.querySelectorAll('a[href*="page="]');
+      if (paginationLinks.length === 0) {
+        const cards = document.querySelectorAll('div[data-cy="ad-card-title"]');
+        return cards.length > 0 ? 1 : 0;
+      }
+      const pages = Array.from(paginationLinks)
+        .map(a => {
+          const match = a.getAttribute('href').match(/page=(\d+)/);
+          return match ? parseInt(match[1]) : null;
+        })
+        .filter(n => !isNaN(n) && n !== null);
+      return pages.length > 0 ? Math.max(...pages) : 1;
+    });
+    
+    await page.close();
+    return paginationInfo;
+  } catch (err) {
+    console.error(`[${categorySlug}] Error checking page count: ${err.message}`);
+    return 0;
+  }
+}
+
 async function scrapePage(browser, category, pageNum) {
-  const url = pageNum === 1
-    ? `${BASE_URL}/${category.slug}/?courier=1`
-    : `${BASE_URL}/${category.slug}/?courier=1&page=${pageNum}`;
+  const url = buildUrl(category.slug, pageNum);
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -141,20 +183,34 @@ async function scrapeCategory(category) {
     ]
   });
 
+  const maxPages = await checkPageCount(browser, category.slug);
+  console.log(`[${category.name}] Detected ${maxPages} pages`);
+
+  if (maxPages === 0) {
+    await browser.close();
+    console.log(`[${category.name}] No listings found`);
+    return [];
+  }
+
   let allListings = [];
   let failedPages = 0;
+  let emptyPages = 0;
 
   for (let p = 1; p <= maxPages; p++) {
     const listings = await scrapePage(browser, category, p);
-    allListings = allListings.concat(listings);
-
-    const success = listings.length > 0;
-    if (success) {
-      console.log(`[${category.name}] Page ${p}/${maxPages} - Found ${listings.length}. Total: ${allListings.length}`);
+    
+    if (listings.length === 0) {
+      emptyPages++;
+      if (emptyPages >= 2) {
+        console.log(`[${category.name}] Stopping at page ${p} - empty pages detected`);
+        break;
+      }
     } else {
-      failedPages++;
-      console.warn(`[${category.name}] Page ${p}/${maxPages} - FAILED (${failedPages} failed so far)`);
+      emptyPages = 0;
     }
+    
+    allListings = allListings.concat(listings);
+    console.log(`[${category.name}] Page ${p}/${maxPages} - Found ${listings.length}. Total: ${allListings.length}`);
 
     if (p < maxPages) {
       await new Promise(r => setTimeout(r, delay));
@@ -162,22 +218,20 @@ async function scrapeCategory(category) {
   }
 
   await browser.close();
-  console.log(`[${category.name}] Done - ${allListings.length} listings, ${failedPages} failed pages`);
+  console.log(`[${category.name}] Done - ${allListings.length} listings`);
 
   return allListings;
 }
 
 async function main() {
-  console.log('=== OLX PC Parts Scraper (Parallel) ===');
-  console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}`);
-  console.log(`Pages per category: ${maxPages}`);
-  console.log(`Delay between pages: ${delay}ms`);
-
+  let filterStr = '';
   if (minPrice !== null || maxPrice !== null) {
-    const rangeStr = `${minPrice !== null ? minPrice : '-∞'} - ${maxPrice !== null ? maxPrice : '+∞'} PLN`;
-    console.log(`Price filter: ${rangeStr}`);
+    filterStr = ` | Price: ${minPrice !== null ? minPrice : '0'} - ${maxPrice !== null ? maxPrice : '∞'} PLN`;
   }
-
+  
+  console.log('=== OLX PC Parts Scraper (URL Filtering) ===');
+  console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}${filterStr}`);
+  console.log(`Delay between pages: ${delay}ms`);
   console.log(`Output: ${outputFile}\n`);
 
   const startTime = Date.now();
@@ -198,12 +252,11 @@ async function main() {
   allListings = Array.from(byUrl.values());
 
   const beforeFilter = allListings.length;
-
+  allListings = filterByPrice(allListings);
+  
   if (minPrice !== null || maxPrice !== null) {
-    const filtered = filterByPrice(allListings);
-    const removed = beforeFilter - filtered.length;
-    console.log(`\n[Filter] Before: ${beforeFilter} | Removed: ${removed} | After: ${filtered.length}`);
-    allListings = filtered;
+    const removed = beforeFilter - allListings.length;
+    console.log(`\n[Filter] Before: ${beforeFilter} | Removed: ${removed} | After: ${allListings.length}`);
   }
 
   writeFileSync(outputFile, JSON.stringify(allListings, null, 2), 'utf-8');
