@@ -1,6 +1,6 @@
 # OLX PC Parts Scraper
 
-A CLI tool to scrape PC parts listings from multiple OLX.pl categories.
+A fast CLI tool to scrape PC parts listings from multiple OLX.pl categories in parallel.
 
 ## Categories
 
@@ -27,15 +27,14 @@ npm install
 ## Usage
 
 ```bash
-# Scrape all categories (default - 6 categories × 25 pages = 150 pages)
+# Scrape all categories (6 categories × 25 pages = 150 pages)
 node scrape.mjs
 
 # Scrape specific category only
 node scrape.mjs --category procesory
-node scrape.mjs --category dyski
 
-# Custom page count per category
-node scrape.mjs --pages 5
+# Custom page count
+node scrape.mjs --pages 10
 
 # Custom delay between pages (ms)
 node scrape.mjs --delay 2000
@@ -53,7 +52,7 @@ node scrape.mjs --category zasilacze --pages 10 --delay 1000
 |--------|---------|-------------|
 | `--category` | all | Category slug (dyski, obudowy, pamieci-ram, plyty-glowne, procesory, zasilacze) |
 | `--pages` | 25 | Pages per category |
-| `--delay` | 1500 | Delay between pages (ms) |
+| `--delay` | 1000 | Delay between pages (ms) |
 | `--output` | listings.json | Output file path |
 
 ## Output
@@ -70,6 +69,12 @@ Generates a JSON file with all listings:
   }
 ]
 ```
+
+## Performance
+
+- **Parallel execution**: All categories scrape simultaneously
+- **Estimated time**: ~5 minutes for full scrape (6 categories × 25 pages)
+- **Memory**: ~1GB RAM recommended
 
 ## License
 

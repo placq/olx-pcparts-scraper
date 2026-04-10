@@ -6,7 +6,7 @@ puppeteer.use(stealth());
 
 const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci';
 const DEFAULT_MAX_PAGES = 25;
-const DEFAULT_DELAY = 1500;
+const DEFAULT_DELAY = 1000;
 const DEFAULT_OUTPUT = 'listings.json';
 const MAX_RETRIES = 3;
 
@@ -50,15 +50,17 @@ if (targetCategory && categoriesToScrape.length === 0) {
   process.exit(1);
 }
 
-const listings = new Map();
-
-async function scrapePage(page, category, pageNum) {
+async function scrapePage(browser, category, pageNum) {
   const url = pageNum === 1
     ? `${BASE_URL}/${category.slug}/?courier=1`
     : `${BASE_URL}/${category.slug}/?courier=1&page=${pageNum}`;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
       await page.waitForSelector('div[data-cy="ad-card-title"]', { timeout: 10000 });
 
@@ -84,62 +86,20 @@ async function scrapePage(page, category, pageNum) {
         return results;
       }, category.slug);
 
-      let newCount = 0;
-      pageListings.forEach(listing => {
-        if (!listings.has(listing.url)) {
-          listings.set(listing.url, listing);
-          newCount++;
-        }
-      });
-
-      console.log(`[${category.name}] Page ${pageNum}/${maxPages} - Found ${pageListings.length}, ${newCount} new. Total: ${listings.size}`);
-
-      if (pageListings.length === 0) {
-        console.warn(`[${category.name}] Page ${pageNum} - WARNING: No listings found.`);
-      }
-
-      return true;
+      await page.close();
+      return pageListings;
     } catch (err) {
-      console.error(`[${category.name}] Page ${pageNum} - Attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, 2000));
       }
     }
   }
 
-  console.error(`[${category.name}] Page ${pageNum} - FAILED after ${MAX_RETRIES} attempts`);
-  return false;
+  return [];
 }
 
-async function scrapeCategory(page, category) {
-  console.log(`\n=== Scraping category: ${category.name} ===`);
-
-  let successCount = 0;
-  let failCount = 0;
-
-  for (let p = 1; p <= maxPages; p++) {
-    const success = await scrapePage(page, category, p);
-    if (success) {
-      successCount++;
-    } else {
-      failCount++;
-    }
-
-    if (p < maxPages) {
-      await new Promise(r => setTimeout(r, delay));
-    }
-  }
-
-  console.log(`[${category.name}] Done - Success: ${successCount}/${maxPages}, Failed: ${failCount}`);
-  return { successCount, failCount };
-}
-
-async function main() {
-  console.log('=== OLX PC Parts Multi-Category Scraper ===');
-  console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}`);
-  console.log(`Pages per category: ${maxPages}`);
-  console.log(`Delay between pages: ${delay}ms`);
-  console.log(`Output: ${outputFile}\n`);
+async function scrapeCategory(category) {
+  console.log(`[${category.name}] Starting...`);
 
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -154,28 +114,55 @@ async function main() {
     ]
   });
 
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1920, height: 1080 });
-  await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+  let allListings = [];
+  let failedPages = 0;
 
-  let totalSuccess = 0;
-  let totalFail = 0;
+  for (let p = 1; p <= maxPages; p++) {
+    const listings = await scrapePage(browser, category, p);
+    allListings = allListings.concat(listings);
 
-  for (const category of categoriesToScrape) {
-    const result = await scrapeCategory(page, category);
-    totalSuccess += result.successCount;
-    totalFail += result.failCount;
+    const success = listings.length > 0;
+    if (success) {
+      console.log(`[${category.name}] Page ${p}/${maxPages} - Found ${listings.length}. Total: ${allListings.length}`);
+    } else {
+      failedPages++;
+      console.warn(`[${category.name}] Page ${p}/${maxPages} - FAILED (${failedPages} failed so far)`);
+    }
 
-    const isLast = category === categoriesToScrape[categoriesToScrape.length - 1];
-    if (!isLast) {
-      console.log(`Waiting ${delay * 2}ms before next category...`);
-      await new Promise(r => setTimeout(r, delay * 2));
+    if (p < maxPages) {
+      await new Promise(r => setTimeout(r, delay));
     }
   }
 
   await browser.close();
+  console.log(`[${category.name}] Done - ${allListings.length} listings, ${failedPages} failed pages`);
 
-  const results = Array.from(listings.values());
+  return allListings;
+}
+
+async function main() {
+  console.log('=== OLX PC Parts Scraper (Parallel) ===');
+  console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}`);
+  console.log(`Pages per category: ${maxPages}`);
+  console.log(`Delay between pages: ${delay}ms`);
+  console.log(`Output: ${outputFile}\n`);
+
+  const startTime = Date.now();
+
+  const resultsByCategory = await Promise.all(
+    categoriesToScrape.map(category => scrapeCategory(category))
+  );
+
+  const allListings = resultsByCategory.flat();
+
+  const byUrl = new Map();
+  allListings.forEach(listing => {
+    if (!byUrl.has(listing.url)) {
+      byUrl.set(listing.url, listing);
+    }
+  });
+
+  const results = Array.from(byUrl.values());
   writeFileSync(outputFile, JSON.stringify(results, null, 2), 'utf-8');
 
   const byCategory = {};
@@ -183,10 +170,10 @@ async function main() {
     byCategory[listing.category] = (byCategory[listing.category] || 0) + 1;
   });
 
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
   console.log('\n=== SCRAPING COMPLETE ===');
-  console.log(`Total pages: ${totalSuccess + totalFail}/${maxPages * categoriesToScrape.length}`);
-  console.log(`Pages successful: ${totalSuccess}`);
-  console.log(`Pages failed: ${totalFail}`);
+  console.log(`Time elapsed: ${elapsed}s`);
   console.log(`Total unique listings: ${results.length}`);
   console.log('\nBy category:');
   Object.entries(byCategory).forEach(([cat, count]) => {
