@@ -42,8 +42,13 @@ node scrape.mjs --delay 2000
 # Custom output file
 node scrape.mjs --output my-listings.json
 
+# Filter by price range
+node scrape.mjs --min-price 100 --max-price 1000
+node scrape.mjs --min-price 200
+node scrape.mjs --max-price 500
+
 # Combined options
-node scrape.mjs --category zasilacze --pages 10 --delay 1000
+node scrape.mjs --category zasilacze --pages 10 --min-price 200 --max-price 1000
 ```
 
 ## Options
@@ -54,6 +59,23 @@ node scrape.mjs --category zasilacze --pages 10 --delay 1000
 | `--pages` | 25 | Pages per category |
 | `--delay` | 1000 | Delay between pages (ms) |
 | `--output` | listings.json | Output file path |
+| `--min-price` | none | Minimum price filter (PLN) |
+| `--max-price` | none | Maximum price filter (PLN) |
+
+## Price Filtering
+
+Price filtering is applied after scraping, before saving to file. You can combine options:
+
+```bash
+# Keep only items between 100-1000 PLN
+node scrape.mjs --min-price 100 --max-price 1000
+
+# Keep only items above 200 PLN
+node scrape.mjs --min-price 200
+
+# Keep only items below 500 PLN
+node scrape.mjs --max-price 500
+```
 
 ## Output
 

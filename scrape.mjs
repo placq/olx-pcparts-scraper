@@ -24,6 +24,8 @@ let maxPages = DEFAULT_MAX_PAGES;
 let delay = DEFAULT_DELAY;
 let outputFile = DEFAULT_OUTPUT;
 let targetCategory = null;
+let minPrice = null;
+let maxPrice = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--pages' && args[i + 1]) {
@@ -38,6 +40,12 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === '--category' && args[i + 1]) {
     targetCategory = args[i + 1];
     i++;
+  } else if (args[i] === '--min-price' && args[i + 1]) {
+    minPrice = parseFloat(args[i + 1]);
+    i++;
+  } else if (args[i] === '--max-price' && args[i + 1]) {
+    maxPrice = parseFloat(args[i + 1]);
+    i++;
   }
 }
 
@@ -48,6 +56,25 @@ const categoriesToScrape = targetCategory
 if (targetCategory && categoriesToScrape.length === 0) {
   console.error(`Category "${targetCategory}" not found. Available: ${CATEGORIES.map(c => c.slug).join(', ')}`);
   process.exit(1);
+}
+
+function parsePrice(priceStr) {
+  if (!priceStr || priceStr === 'N/A') return NaN;
+  const cleaned = priceStr.replace(/[^\d,]/g, '').replace(',', '.');
+  return parseFloat(cleaned);
+}
+
+function filterByPrice(listings) {
+  if (minPrice === null && maxPrice === null) return listings;
+
+  return listings.filter(listing => {
+    const price = parsePrice(listing.price);
+    if (isNaN(price)) return true;
+
+    if (minPrice !== null && price < minPrice) return false;
+    if (maxPrice !== null && price > maxPrice) return false;
+    return true;
+  });
 }
 
 async function scrapePage(browser, category, pageNum) {
@@ -145,6 +172,12 @@ async function main() {
   console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}`);
   console.log(`Pages per category: ${maxPages}`);
   console.log(`Delay between pages: ${delay}ms`);
+
+  if (minPrice !== null || maxPrice !== null) {
+    const rangeStr = `${minPrice !== null ? minPrice : '-∞'} - ${maxPrice !== null ? maxPrice : '+∞'} PLN`;
+    console.log(`Price filter: ${rangeStr}`);
+  }
+
   console.log(`Output: ${outputFile}\n`);
 
   const startTime = Date.now();
@@ -153,7 +186,7 @@ async function main() {
     categoriesToScrape.map(category => scrapeCategory(category))
   );
 
-  const allListings = resultsByCategory.flat();
+  let allListings = resultsByCategory.flat();
 
   const byUrl = new Map();
   allListings.forEach(listing => {
@@ -162,11 +195,21 @@ async function main() {
     }
   });
 
-  const results = Array.from(byUrl.values());
-  writeFileSync(outputFile, JSON.stringify(results, null, 2), 'utf-8');
+  allListings = Array.from(byUrl.values());
+
+  const beforeFilter = allListings.length;
+
+  if (minPrice !== null || maxPrice !== null) {
+    const filtered = filterByPrice(allListings);
+    const removed = beforeFilter - filtered.length;
+    console.log(`\n[Filter] Before: ${beforeFilter} | Removed: ${removed} | After: ${filtered.length}`);
+    allListings = filtered;
+  }
+
+  writeFileSync(outputFile, JSON.stringify(allListings, null, 2), 'utf-8');
 
   const byCategory = {};
-  results.forEach(listing => {
+  allListings.forEach(listing => {
     byCategory[listing.category] = (byCategory[listing.category] || 0) + 1;
   });
 
@@ -174,7 +217,7 @@ async function main() {
 
   console.log('\n=== SCRAPING COMPLETE ===');
   console.log(`Time elapsed: ${elapsed}s`);
-  console.log(`Total unique listings: ${results.length}`);
+  console.log(`Total unique listings: ${allListings.length}`);
   console.log('\nBy category:');
   Object.entries(byCategory).forEach(([cat, count]) => {
     const catName = CATEGORIES.find(c => c.slug === cat)?.name || cat;
