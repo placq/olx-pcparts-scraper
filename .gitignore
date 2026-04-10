@@ -1,3 +1,4 @@
 node_modules/
-listings.json
-*.log
+output/
+*.json
+!package-lock.json

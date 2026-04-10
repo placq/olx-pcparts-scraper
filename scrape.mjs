@@ -1,12 +1,12 @@
 import puppeteer from 'puppeteer-extra';
 import stealth from 'puppeteer-extra-plugin-stealth';
-import { writeFileSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
 
 puppeteer.use(stealth());
 
 const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci';
 const DEFAULT_DELAY = 1000;
-const DEFAULT_OUTPUT = 'listings.json';
+const DEFAULT_OUTPUT_DIR = 'output';
 const MAX_RETRIES = 3;
 
 const CATEGORIES = [
@@ -20,7 +20,8 @@ const CATEGORIES = [
 
 const args = process.argv.slice(2);
 let delay = DEFAULT_DELAY;
-let outputFile = DEFAULT_OUTPUT;
+let outputDir = DEFAULT_OUTPUT_DIR;
+let singleOutputFile = null;
 let targetCategory = null;
 let minPrice = null;
 let maxPrice = null;
@@ -30,7 +31,7 @@ for (let i = 0; i < args.length; i++) {
     delay = parseInt(args[i + 1], 10);
     i++;
   } else if (args[i] === '--output' && args[i + 1]) {
-    outputFile = args[i + 1];
+    singleOutputFile = args[i + 1];
     i++;
   } else if (args[i] === '--category' && args[i + 1]) {
     targetCategory = args[i + 1];
@@ -40,6 +41,9 @@ for (let i = 0; i < args.length; i++) {
     i++;
   } else if (args[i] === '--max-price' && args[i + 1]) {
     maxPrice = parseFloat(args[i + 1]);
+    i++;
+  } else if (args[i] === '--output-dir' && args[i + 1]) {
+    outputDir = args[i + 1];
     i++;
   }
 }
@@ -189,7 +193,7 @@ async function scrapeCategory(category) {
   if (maxPages === 0) {
     await browser.close();
     console.log(`[${category.name}] No listings found`);
-    return [];
+    return { category, listings: [], slug: category.slug };
   }
 
   let allListings = [];
@@ -218,9 +222,43 @@ async function scrapeCategory(category) {
   }
 
   await browser.close();
-  console.log(`[${category.name}] Done - ${allListings.length} listings`);
+  
+  const byUrl = new Map();
+  allListings.forEach(listing => {
+    if (!byUrl.has(listing.url)) {
+      byUrl.set(listing.url, listing);
+    }
+  });
+  
+  const filteredListings = filterByPrice(Array.from(byUrl.values()));
+  
+  console.log(`[${category.name}] Done - ${allListings.length} scraped, ${filteredListings.length} after filter`);
 
-  return allListings;
+  return { category, listings: filteredListings, slug: category.slug };
+}
+
+function saveResults(results, isSingleFile) {
+  if (isSingleFile) {
+    const allListings = results.flatMap(r => r.listings);
+    writeFileSync(singleOutputFile, JSON.stringify(allListings, null, 2), 'utf-8');
+    return { type: 'single', path: singleOutputFile, count: allListings.length };
+  } else {
+    if (!existsSync(outputDir)) {
+      mkdirSync(outputDir, { recursive: true });
+    }
+    
+    const byCategory = {};
+    results.forEach(result => {
+      const filename = `${outputDir}/${result.slug}.json`;
+      writeFileSync(filename, JSON.stringify(result.listings, null, 2), 'utf-8');
+      byCategory[result.slug] = {
+        path: filename,
+        count: result.listings.length
+      };
+    });
+    
+    return { type: 'split', dir: outputDir, categories: byCategory };
+  }
 }
 
 async function main() {
@@ -229,54 +267,44 @@ async function main() {
     filterStr = ` | Price: ${minPrice !== null ? minPrice : '0'} - ${maxPrice !== null ? maxPrice : '∞'} PLN`;
   }
   
-  console.log('=== OLX PC Parts Scraper (URL Filtering) ===');
+  const outputMode = singleOutputFile ? 'single file' : 'split by category';
+  
+  console.log('=== OLX PC Parts Scraper ===');
   console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}${filterStr}`);
   console.log(`Delay between pages: ${delay}ms`);
-  console.log(`Output: ${outputFile}\n`);
+  console.log(`Output mode: ${outputMode}`);
+  if (singleOutputFile) {
+    console.log(`Output file: ${singleOutputFile}`);
+  } else {
+    console.log(`Output dir: ${outputDir}/`);
+  }
+  console.log('');
 
   const startTime = Date.now();
 
-  const resultsByCategory = await Promise.all(
+  const results = await Promise.all(
     categoriesToScrape.map(category => scrapeCategory(category))
   );
 
-  let allListings = resultsByCategory.flat();
-
-  const byUrl = new Map();
-  allListings.forEach(listing => {
-    if (!byUrl.has(listing.url)) {
-      byUrl.set(listing.url, listing);
-    }
-  });
-
-  allListings = Array.from(byUrl.values());
-
-  const beforeFilter = allListings.length;
-  allListings = filterByPrice(allListings);
-  
-  if (minPrice !== null || maxPrice !== null) {
-    const removed = beforeFilter - allListings.length;
-    console.log(`\n[Filter] Before: ${beforeFilter} | Removed: ${removed} | After: ${allListings.length}`);
-  }
-
-  writeFileSync(outputFile, JSON.stringify(allListings, null, 2), 'utf-8');
-
-  const byCategory = {};
-  allListings.forEach(listing => {
-    byCategory[listing.category] = (byCategory[listing.category] || 0) + 1;
-  });
+  const saveResult = saveResults(results, !!singleOutputFile);
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const totalCount = results.reduce((sum, r) => sum + r.listings.length, 0);
 
   console.log('\n=== SCRAPING COMPLETE ===');
   console.log(`Time elapsed: ${elapsed}s`);
-  console.log(`Total unique listings: ${allListings.length}`);
-  console.log('\nBy category:');
-  Object.entries(byCategory).forEach(([cat, count]) => {
-    const catName = CATEGORIES.find(c => c.slug === cat)?.name || cat;
-    console.log(`  ${catName}: ${count}`);
-  });
-  console.log(`\nOutput saved to: ${outputFile}`);
+  console.log(`Total listings: ${totalCount}`);
+  
+  if (saveResult.type === 'single') {
+    console.log(`\nSaved to: ${saveResult.path}`);
+  } else {
+    console.log(`\nSaved to: ${saveResult.dir}/`);
+    console.log('By category:');
+    Object.entries(saveResult.categories).forEach(([slug, info]) => {
+      const catName = CATEGORIES.find(c => c.slug === slug)?.name || slug;
+      console.log(`  ${catName}: ${info.count} (${info.path})`);
+    });
+  }
 }
 
 main().catch(console.error);
