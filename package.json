@@ -1,16 +1,17 @@
 {
-  "name": "olx_pcparts_scrapper",
+  "name": "olx-pcparts-scraper",
   "version": "1.0.0",
-  "description": "OLX PC Parts Scraper",
+  "description": "Multi-category OLX PC Parts Scraper",
   "main": "scrape.mjs",
   "scripts": {
     "scrape": "node scrape.mjs",
     "scrape:fast": "node scrape.mjs --delay 500",
-    "scrape:verbose": "node scrape.mjs --pages 3 --delay 2000"
+    "scrape:category": "node scrape.mjs --category",
+    "scrape:verbose": "node scrape.mjs --pages 2 --delay 2000"
   },
-  "keywords": ["olx", "scraper", "puppeteer"],
+  "keywords": ["olx", "scraper", "puppeteer", "poland"],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "puppeteer": "^24.40.0",

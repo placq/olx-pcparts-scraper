@@ -4,16 +4,26 @@ import { writeFileSync } from 'fs';
 
 puppeteer.use(stealth());
 
-const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci/';
+const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci';
 const DEFAULT_MAX_PAGES = 25;
 const DEFAULT_DELAY = 1500;
 const DEFAULT_OUTPUT = 'listings.json';
 const MAX_RETRIES = 3;
 
+const CATEGORIES = [
+  { slug: 'dyski', name: 'Dyski' },
+  { slug: 'obudowy', name: 'Obudowy' },
+  { slug: 'pamieci-ram', name: 'Pamięci RAM' },
+  { slug: 'plyty-glowne', name: 'Płyty główne' },
+  { slug: 'procesory', name: 'Procesory' },
+  { slug: 'zasilacze', name: 'Zasilacze' }
+];
+
 const args = process.argv.slice(2);
 let maxPages = DEFAULT_MAX_PAGES;
 let delay = DEFAULT_DELAY;
 let outputFile = DEFAULT_OUTPUT;
+let targetCategory = null;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--pages' && args[i + 1]) {
@@ -25,25 +35,34 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === '--output' && args[i + 1]) {
     outputFile = args[i + 1];
     i++;
+  } else if (args[i] === '--category' && args[i + 1]) {
+    targetCategory = args[i + 1];
+    i++;
   }
+}
+
+const categoriesToScrape = targetCategory
+  ? CATEGORIES.filter(c => c.slug === targetCategory || c.name.toLowerCase() === targetCategory.toLowerCase())
+  : CATEGORIES;
+
+if (targetCategory && categoriesToScrape.length === 0) {
+  console.error(`Category "${targetCategory}" not found. Available: ${CATEGORIES.map(c => c.slug).join(', ')}`);
+  process.exit(1);
 }
 
 const listings = new Map();
 
-async function scrapePage(page, pageNum) {
+async function scrapePage(page, category, pageNum) {
   const url = pageNum === 1
-    ? `${BASE_URL}?courier=1`
-    : `${BASE_URL}?courier=1&page=${pageNum}`;
-
-  console.log(`\n[Page ${pageNum}/${maxPages}] Loading: ${url}`);
+    ? `${BASE_URL}/${category.slug}/?courier=1`
+    : `${BASE_URL}/${category.slug}/?courier=1&page=${pageNum}`;
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-
       await page.waitForSelector('div[data-cy="ad-card-title"]', { timeout: 10000 });
 
-      const pageListings = await page.evaluate(() => {
+      const pageListings = await page.evaluate((catSlug) => {
         const cards = document.querySelectorAll('div[data-cy="ad-card-title"]');
         const results = [];
 
@@ -57,13 +76,13 @@ async function scrapePage(page, pageNum) {
           const price = priceEl ? priceEl.textContent.trim().replace(/\s{2,}/g, ' ').replace(/zł(\w)/g, 'zł $1') : 'N/A';
 
           if (title && href) {
-            let url = href.startsWith('http') ? href : `https://www.olx.pl${href}`;
-            results.push({ title, url, price });
+            const url = href.startsWith('http') ? href : `https://www.olx.pl${href}`;
+            results.push({ title, url, price, category: catSlug });
           }
         });
 
         return results;
-      });
+      }, category.slug);
 
       let newCount = 0;
       pageListings.forEach(listing => {
@@ -73,28 +92,54 @@ async function scrapePage(page, pageNum) {
         }
       });
 
-      console.log(`[Page ${pageNum}] Found ${pageListings.length} listings, ${newCount} new. Total: ${listings.size}`);
+      console.log(`[${category.name}] Page ${pageNum}/${maxPages} - Found ${pageListings.length}, ${newCount} new. Total: ${listings.size}`);
 
       if (pageListings.length === 0) {
-        console.warn(`[Page ${pageNum}] WARNING: No listings found. Possible anti-bot detection.`);
+        console.warn(`[${category.name}] Page ${pageNum} - WARNING: No listings found.`);
       }
 
       return true;
     } catch (err) {
-      console.error(`[Page ${pageNum}] Attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
+      console.error(`[${category.name}] Page ${pageNum} - Attempt ${attempt}/${MAX_RETRIES} failed: ${err.message}`);
       if (attempt < MAX_RETRIES) {
         await new Promise(r => setTimeout(r, 2000));
       }
     }
   }
 
-  console.error(`[Page ${pageNum}] FAILED after ${MAX_RETRIES} attempts`);
+  console.error(`[${category.name}] Page ${pageNum} - FAILED after ${MAX_RETRIES} attempts`);
   return false;
 }
 
+async function scrapeCategory(page, category) {
+  console.log(`\n=== Scraping category: ${category.name} ===`);
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let p = 1; p <= maxPages; p++) {
+    const success = await scrapePage(page, category, p);
+    if (success) {
+      successCount++;
+    } else {
+      failCount++;
+    }
+
+    if (p < maxPages) {
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+
+  console.log(`[${category.name}] Done - Success: ${successCount}/${maxPages}, Failed: ${failCount}`);
+  return { successCount, failCount };
+}
+
 async function main() {
-  console.log('=== OLX PC Parts Scraper ===');
-  console.log(`Max pages: ${maxPages}, Delay: ${delay}ms, Output: ${outputFile}\n`);
+  console.log('=== OLX PC Parts Multi-Category Scraper ===');
+  console.log(`Categories: ${categoriesToScrape.map(c => c.name).join(', ')}`);
+  console.log(`Pages per category: ${maxPages}`);
+  console.log(`Delay between pages: ${delay}ms`);
+  console.log(`Output: ${outputFile}\n`);
 
   const browser = await puppeteer.launch({
     headless: 'new',
@@ -113,20 +158,18 @@ async function main() {
   await page.setViewport({ width: 1920, height: 1080 });
   await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-  let successCount = 0;
-  let failCount = 0;
+  let totalSuccess = 0;
+  let totalFail = 0;
 
-  for (let p = 1; p <= maxPages; p++) {
-    const success = await scrapePage(page, p);
-    if (success) {
-      successCount++;
-    } else {
-      failCount++;
-    }
+  for (const category of categoriesToScrape) {
+    const result = await scrapeCategory(page, category);
+    totalSuccess += result.successCount;
+    totalFail += result.failCount;
 
-    if (p < maxPages) {
-      console.log(`Waiting ${delay}ms before next page...`);
-      await new Promise(r => setTimeout(r, delay));
+    const isLast = category === categoriesToScrape[categoriesToScrape.length - 1];
+    if (!isLast) {
+      console.log(`Waiting ${delay * 2}ms before next category...`);
+      await new Promise(r => setTimeout(r, delay * 2));
     }
   }
 
@@ -135,11 +178,22 @@ async function main() {
   const results = Array.from(listings.values());
   writeFileSync(outputFile, JSON.stringify(results, null, 2), 'utf-8');
 
+  const byCategory = {};
+  results.forEach(listing => {
+    byCategory[listing.category] = (byCategory[listing.category] || 0) + 1;
+  });
+
   console.log('\n=== SCRAPING COMPLETE ===');
-  console.log(`Pages successful: ${successCount}/${maxPages}`);
-  console.log(`Pages failed: ${failCount}`);
+  console.log(`Total pages: ${totalSuccess + totalFail}/${maxPages * categoriesToScrape.length}`);
+  console.log(`Pages successful: ${totalSuccess}`);
+  console.log(`Pages failed: ${totalFail}`);
   console.log(`Total unique listings: ${results.length}`);
-  console.log(`Output saved to: ${outputFile}`);
+  console.log('\nBy category:');
+  Object.entries(byCategory).forEach(([cat, count]) => {
+    const catName = CATEGORIES.find(c => c.slug === cat)?.name || cat;
+    console.log(`  ${catName}: ${count}`);
+  });
+  console.log(`\nOutput saved to: ${outputFile}`);
 }
 
 main().catch(console.error);

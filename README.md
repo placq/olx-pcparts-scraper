@@ -1,14 +1,15 @@
 # OLX PC Parts Scraper
 
-A simple CLI tool to scrape PC parts listings from OLX.pl (Polish classifieds).
+A CLI tool to scrape PC parts listings from multiple OLX.pl categories.
 
-## Features
+## Categories
 
-- Scrapes all listings from OLX's computer parts category
-- Extracts: title, URL, price
-- Deduplicates results by URL
-- Headless browser with stealth mode to avoid blocking
-- Configurable page count and delay
+- Dyski (Disks/Drives)
+- Obudowy (Cases)
+- Pamięci RAM (RAM Memory)
+- Płyty główne (Motherboards)
+- Procesory (Processors)
+- Zasilacze (Power Supplies)
 
 ## Prerequisites
 
@@ -26,37 +27,46 @@ npm install
 ## Usage
 
 ```bash
-# Scrape all 25 pages (default)
+# Scrape all categories (default - 6 categories × 25 pages = 150 pages)
 node scrape.mjs
 
-# Custom page count
+# Scrape specific category only
+node scrape.mjs --category procesory
+node scrape.mjs --category dyski
+
+# Custom page count per category
 node scrape.mjs --pages 5
 
 # Custom delay between pages (ms)
 node scrape.mjs --delay 2000
 
+# Custom output file
+node scrape.mjs --output my-listings.json
+
 # Combined options
-node scrape.mjs --pages 10 --delay 1000 --output my-listings.json
+node scrape.mjs --category zasilacze --pages 10 --delay 1000
 ```
 
 ## Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--pages` | 25 | Number of pages to scrape |
+| `--category` | all | Category slug (dyski, obudowy, pamieci-ram, plyty-glowne, procesory, zasilacze) |
+| `--pages` | 25 | Pages per category |
 | `--delay` | 1500 | Delay between pages (ms) |
 | `--output` | listings.json | Output file path |
 
 ## Output
 
-Generates a JSON file with array of listings:
+Generates a JSON file with all listings:
 
 ```json
 [
   {
     "title": "RTX 4070 Graphics Card",
     "url": "https://www.olx.pl/d/oferta/...",
-    "price": "2 000 zł"
+    "price": "2 000 zł",
+    "category": "procesory"
   }
 ]
 ```
