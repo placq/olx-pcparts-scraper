@@ -1,0 +1,20 @@
+{
+  "name": "olx_pcparts_scrapper",
+  "version": "1.0.0",
+  "description": "OLX PC Parts Scraper",
+  "main": "scrape.mjs",
+  "scripts": {
+    "scrape": "node scrape.mjs",
+    "scrape:fast": "node scrape.mjs --delay 500",
+    "scrape:verbose": "node scrape.mjs --pages 3 --delay 2000"
+  },
+  "keywords": ["olx", "scraper", "puppeteer"],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "puppeteer": "^24.40.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+}
