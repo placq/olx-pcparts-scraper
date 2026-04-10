@@ -7,6 +7,7 @@ puppeteer.use(stealth());
 const BASE_URL = 'https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci';
 const DEFAULT_DELAY = 1000;
 const DEFAULT_OUTPUT_DIR = 'output';
+const WEBHOOK_URL = 'https://n8n.wphl.eu/webhook-test/e8e167c1-6915-4138-9739-c902134ad457';
 const MAX_RETRIES = 3;
 
 const CATEGORIES = [
@@ -25,6 +26,7 @@ let singleOutputFile = null;
 let targetCategory = null;
 let minPrice = null;
 let maxPrice = null;
+let sendWebhook = false;
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--delay' && args[i + 1]) {
@@ -45,6 +47,8 @@ for (let i = 0; i < args.length; i++) {
   } else if (args[i] === '--output-dir' && args[i + 1]) {
     outputDir = args[i + 1];
     i++;
+  } else if (args[i] === '--webhook') {
+    sendWebhook = true;
   }
 }
 
@@ -261,6 +265,64 @@ function saveResults(results, isSingleFile) {
   }
 }
 
+function buildWebhookPayload(results) {
+  const categories = {};
+  let totalCount = 0;
+  
+  results.forEach(result => {
+    categories[result.slug] = {
+      name: result.category.name,
+      count: result.listings.length,
+      listings: result.listings
+    };
+    totalCount += result.listings.length;
+  });
+  
+  return {
+    timestamp: new Date().toISOString(),
+    settings: {
+      categories: categoriesToScrape.map(c => c.slug),
+      minPrice: minPrice,
+      maxPrice: maxPrice
+    },
+    totalCount: totalCount,
+    categories: categories
+  };
+}
+
+async function sendToWebhook(payload) {
+  console.log(`\n[Webhook] Sending to ${WEBHOOK_URL}...`);
+  
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(WEBHOOK_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      });
+      
+      if (response.ok) {
+        console.log(`[Webhook] SUCCESS - Status: ${response.status}`);
+        return true;
+      } else {
+        console.error(`[Webhook] FAILED - Status: ${response.status}`);
+      }
+    } catch (err) {
+      console.error(`[Webhook] ERROR: ${err.message}`);
+    }
+    
+    if (attempt < MAX_RETRIES) {
+      console.log(`[Webhook] Retrying in 3s... (${attempt}/${MAX_RETRIES})`);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+  
+  console.error(`[Webhook] FAILED after ${MAX_RETRIES} attempts`);
+  return false;
+}
+
 async function main() {
   let filterStr = '';
   if (minPrice !== null || maxPrice !== null) {
@@ -277,6 +339,9 @@ async function main() {
     console.log(`Output file: ${singleOutputFile}`);
   } else {
     console.log(`Output dir: ${outputDir}/`);
+  }
+  if (sendWebhook) {
+    console.log(`Webhook: ENABLED`);
   }
   console.log('');
 
@@ -304,6 +369,11 @@ async function main() {
       const catName = CATEGORIES.find(c => c.slug === slug)?.name || slug;
       console.log(`  ${catName}: ${info.count} (${info.path})`);
     });
+  }
+  
+  if (sendWebhook) {
+    const payload = buildWebhookPayload(results);
+    await sendToWebhook(payload);
   }
 }
 

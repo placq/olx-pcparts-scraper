@@ -1,11 +1,137 @@
-Hi, the goal for this project is to make simple CLI app with the sole pourpouse to scrap the one single category on OLX.pl with one querry flag - https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci/?courier=1
-This app should be written in JS with the usage of axios. the idea right now is to downloade whole html, identyfy auction title, price, url and pagionation buttons. Save to JSON title, url and price (without doubles), then proceed to the next page and to it all over again. There are 25 pages.
+# OLX PC Parts Scraper - Projekt
 
-title, ulr and price are in <div data-cy="ad-card-title" data-testid="ad-card-title" class="css-u2ayx9">
+## Cel projektu
+CLI aplikacja do scrapowania ofert części komputerowych z OLX.pl.
 
-title - <h4 data-nx-name="H4" data-nx-legacy="true" class="css-hzlye5">Pamięć RAM Yongxinsheng DDR4 32GB 2666MHz PC4-21300 UDIMM</h4>
-url - <a class="css-1tqlkj0" href="/d/oferta/pamiec-ram-yongxinsheng-ddr4-32gb-2666mhz-pc4-21300-udimm-CID99-ID19Mry9.html?search_reason=search%7Corganic">
-price - <p data-testid="ad-price" data-nx-name="P2" data-nx-legacy="true" class="css-blr5zl">flex
+## Struktura projektu
+```
+olx-pcparts-scraper/
+├── scrape.mjs          # Główny scraper
+├── package.json        # Konfiguracja npm
+├── README.md          # Dokumentacja
+├── .gitignore
+└── output/            # Folder z wynikami (generowany)
+    ├── dyski.json
+    ├── obudowy.json
+    ├── pamieci-ram.json
+    ├── plyty-glowne.json
+    ├── procesory.json
+    └── zasilacze.json
+```
 
-secon page url looks like this https://www.olx.pl/elektronika/komputery/podzespoly-i-czesci/?courier=1&page=2 so you can just change the page=2 number to 3, 4 and so on, there is no need to find pagination buttons. There are 25 pages, you can hardcode it.
-the outcom should be a structured json with title, url and price
+## Funkcjonalności
+
+### 1. Scrapowanie kategorii
+- **6 kategorii**: dyski, obudowy, pamieci-ram, plyty-glowne, procesory, zasilacze
+- **Parallel execution** - każda kategoria w osobnej przeglądarce
+- **Dynamic pagination** - automatycznie wykrywa koniec wyników
+- **Deduplikacja** - po URL
+
+### 2. Filtrowanie cenowe
+- **URL filtering** - parametry w URL OLX przyspieszają scrape
+- **Client-side filtering** - backup dla 100% dokładności
+- Parametry: `--min-price` i `--max-price`
+
+### 3. Tryby wyjścia
+- **Split mode (domyślny)** - osobne pliki JSON per kategoria w `output/`
+- **Single file mode** - `--output <file>` - wszystko w jednym pliku
+
+### 4. Webhook (n8n)
+- **URL**: `https://n8n.wphl.eu/webhook-test/e8e167c1-6915-4138-9739-c902134ad457`
+- **Flagi**: `--webhook` - wysyła cały payload po zakończeniu
+- **Payload format**:
+```json
+{
+  "timestamp": "2025-04-10T12:00:00.000Z",
+  "settings": {
+    "categories": ["dyski", "obudowy", ...],
+    "minPrice": 100,
+    "maxPrice": 1000
+  },
+  "totalCount": 3500,
+  "categories": {
+    "dyski": {
+      "name": "Dyski",
+      "count": 600,
+      "listings": [...]
+    }
+  }
+}
+```
+
+## Użycie
+
+```bash
+# Podstawowe użycie - wszystkie kategorie, split output
+node scrape.mjs
+
+# Konkretna kategoria
+node scrape.mjs --category procesory
+
+# Filtrowanie cenowe
+node scrape.mjs --min-price 100 --max-price 1000
+
+# Tryb single file
+node scrape.mjs --output all.json
+
+# Webhook (n8n)
+node scrape.mjs --webhook
+
+# Własny folder wyjściowy
+node scrape.mjs --output-dir moje-dane/
+
+# Kombinacja
+node scrape.mjs --webhook --min-price 100 --max-price 1000
+```
+
+## Opcje CLI
+
+| Opcja | Domyślnie | Opis |
+|-------|----------|------|
+| `--category` | all | Kategoria (dyski, obudowy, pamieci-ram, plyty-glowne, procesory, zasilacze) |
+| `--delay` | 1000 | Opóźnienie między stronami (ms) |
+| `--output` | - | Tryb single file |
+| `--output-dir` | output/ | Folder dla trybu split |
+| `--min-price` | - | Min cena (PLN) |
+| `--max-price` | - | Max cena (PLN) |
+| `--webhook` | false | Wysyłanie do n8n |
+
+## Technologie
+- **Puppeteer Extra** - headless browser
+- **Stealth Plugin** - unikanie wykrycia
+- **Node.js fetch** - webhook HTTP POST
+- **Parallel scraping** - Promise.all() dla kategorii
+
+## TODO / Następne kroki
+
+### Zrobione ✅
+- [x] Podstawowy scraper z Puppeteer
+- [x] Multi-category support
+- [x] Parallel execution
+- [x] URL-based price filtering
+- [x] Dynamic pagination
+- [x] Split output by category
+- [x] Webhook integration (n8n)
+
+### Do zrobienia 🔲
+- [ ] Test webhooka z n8n
+- [ ] Cron job na serwerze LXC
+- [ ] Rozważyć dodanie więcej kategorii OLX
+- [ ] Historia zmian cen (porównanie z poprzednim scrapem)
+- [ ] Export do innych formatów (CSV, Excel)
+
+## Cron na LXC
+```bash
+# Crontab - codziennie o 6:00
+0 6 * * * cd /path/to/olx-pcparts-scraper && node scrape.mjs --webhook --min-price 100 --max-price 1000 >> /var/log/olx-scraper.log 2>&1
+```
+
+## Repozytorium
+https://github.com/placq/olx-pcparts-scraper
+
+## Instalacja na nowym serwerze
+```bash
+git clone git@github.com:placq/olx-pcparts-scraper.git
+cd olx-pcparts-scraper
+npm install
+```
